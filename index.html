@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Indexer Pool 与 Index Cache 管理 · SGLang / vLLM</title>
+<style>
+  :root {
+    --ink: #17222d;
+    --ink-2: #3b4a58;
+    --muted: #687583;
+    --line: #d7dfe7;
+    --soft: #f3f6f8;
+    --paper: #ffffff;
+    --accent: #2d6b5f;
+    --accent-soft: #e7f0ed;
+    --amber: #9b5f1f;
+    --amber-soft: #fbf2e7;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    --sans: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--soft); color: var(--ink); font-family: var(--sans); font-size: 17px; line-height: 1.9; -webkit-font-smoothing: antialiased; }
+  .page { max-width: 1180px; margin: 0 auto; padding: 64px 30px 80px; }
+  header { border-bottom: 1px solid var(--line); padding-bottom: 30px; margin-bottom: 36px; }
+  .eyebrow { color: var(--accent); font-family: var(--mono); font-size: 11.5px; letter-spacing: .13em; text-transform: uppercase; margin-bottom: 14px; }
+  h1 { margin: 0; font-size: 46px; line-height: 1.25; letter-spacing: -.025em; font-weight: 650; }
+  .subtitle { margin: 14px 0 0; color: var(--ink-2); font-size: 18.5px; line-height: 1.8; max-width: 860px; }
+  .meta { margin-top: 20px; color: var(--muted); font-size: 12.5px; font-family: var(--mono); }
+  section { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 38px 42px; margin-bottom: 28px; }
+  .section-head { display: flex; align-items: baseline; gap: 14px; border-bottom: 1px solid var(--line); padding-bottom: 14px; margin-bottom: 28px; }
+  .section-no { color: var(--accent); font-family: var(--mono); font-size: 11.5px; letter-spacing: .08em; white-space: nowrap; }
+  h2 { margin: 0; font-size: 28px; line-height: 1.35; font-weight: 650; letter-spacing: -.015em; }
+  h3 { margin: 38px 0 14px; font-size: 21px; line-height: 1.45; font-weight: 650; }
+  h3:first-of-type { margin-top: 4px; }
+  h4 { margin: 24px 0 7px; font-size: 14px; font-weight: 650; color: var(--ink-2); letter-spacing: .01em; }
+  p { margin: 0 0 14px; }
+  p:last-child { margin-bottom: 0; }
+  .lead { color: var(--ink-2); font-size: 17.5px; line-height: 1.9; max-width: 930px; }
+  .muted { color: var(--muted); }
+  .tag { display: inline-block; vertical-align: 3px; padding: 2px 8px; border-radius: 3px; font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em; border: 1px solid var(--line); color: var(--muted); background: #fbfcfd; white-space: nowrap; }
+  .tag-diff { color: var(--amber); border-color: #dfb98d; background: var(--amber-soft); }
+  code { font-family: var(--mono); font-size: .86em; background: #f2f5f7; border: 1px solid #e2e8ed; border-radius: 3px; padding: 1px 5px; color: #263846; white-space: nowrap; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { border: 1px solid var(--line); border-radius: 6px; padding: 20px 22px; background: #fbfcfd; }
+  .card h4 { margin: 0 0 5px; font-size: 16px; color: var(--ink); }
+  .card .sub { color: var(--muted); font-family: var(--mono); font-size: 10.5px; line-height: 1.6; margin-bottom: 12px; }
+  .card p { color: var(--ink-2); font-size: 14.5px; line-height: 1.8; margin-bottom: 8px; }
+  .metric { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; border-top: 1px dashed var(--line); padding-top: 9px; margin-top: 10px; color: var(--ink-2); font-size: 13.5px; }
+  .metric b { font-family: var(--mono); font-weight: 600; color: var(--ink); white-space: nowrap; }
+  .table-wrap { overflow-x: auto; margin: 18px 0 8px; border: 1px solid var(--line); border-radius: 5px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.7; background: #fff; }
+  th, td { text-align: left; vertical-align: top; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  th { color: var(--ink-2); background: #f7f9fa; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  .callout { border-left: 3px solid var(--accent); background: var(--accent-soft); border-radius: 0 5px 5px 0; padding: 17px 20px; margin: 22px 0; color: var(--ink-2); font-size: 15px; line-height: 1.8; }
+  .callout.warn { border-left-color: var(--amber); background: var(--amber-soft); }
+  .callout b { color: var(--ink); }
+  .calc { margin-top: 12px; padding: 12px 14px; background: #ffffff; border: 1px solid #cfe0da; border-radius: 4px; font-family: var(--mono); font-size: 12.5px; line-height: 1.9; color: #2c3e50; }
+  .calc div { white-space: nowrap; overflow-x: auto; }
+  .flow { display: grid; grid-template-columns: 1fr 26px 1fr 26px 1fr 26px 1fr; gap: 0; align-items: stretch; margin: 18px 0 8px; }
+  .flow .step { border: 1px solid var(--line); border-radius: 5px; background: #fbfcfd; padding: 14px 15px; font-size: 14px; line-height: 1.65; color: var(--ink-2); }
+  .flow .step b { display: block; color: var(--ink); font-size: 13.5px; margin-bottom: 3px; }
+  .flow .arrow { display: flex; align-items: center; justify-content: center; color: var(--muted); font-family: var(--mono); font-size: 15px; }
+  .visual { border: 1px solid var(--line); border-radius: 6px; background: #fbfcfd; padding: 18px 20px; margin: 18px 0; overflow-x: auto; }
+  .visual svg { display: block; width: 100%; height: auto; min-width: 720px; }
+  .visual-caption { color: var(--muted); font-size: 12.5px; line-height: 1.7; margin-top: 9px; }
+  .cap-chart { margin: 22px 0 8px; display: flex; flex-direction: column; gap: 10px; }
+  .cap-row { display: grid; grid-template-columns: 180px 1fr 96px; gap: 12px; align-items: center; font-size: 13.5px; }
+  .cap-name { color: var(--ink-2); }
+  .cap-track { height: 18px; background: #eef2f5; border-radius: 3px; overflow: hidden; }
+  .cap-fill { height: 100%; border-radius: 2px; }
+  .cap-val { font-family: var(--mono); font-size: 12.5px; color: var(--ink); text-align: right; }
+  .stack-row { display: grid; grid-template-columns: 156px 1fr 92px; gap: 12px; align-items: center; font-size: 13.5px; margin: 10px 0; }
+  .stack-chart { margin: 18px 0 8px; }
+  .stack-track { display: flex; height: 20px; background: #eef2f5; border-radius: 3px; overflow: hidden; }
+  .stack-main { background: #2d5b98; height: 100%; }
+  .stack-index { background: #a8641f; height: 100%; }
+  .stack-val { font-family: var(--mono); font-size: 12.5px; text-align: right; color: var(--ink); }
+  .stack-legend { display: flex; gap: 16px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+  .stack-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .c-dsa { background: #2d5b98; }
+  .c-bf16 { background: #2d6b5f; }
+  .c-fp8 { background: #6f9a83; }
+  .c-nvfp4 { background: #a8641f; }
+  .c-c2 { background: #7a5a9e; }
+  .c-c2f { background: #b491cf; }
+  .c-c4 { background: #9b5f1f; }
+  .c-c4f { background: #d0a26b; }
+  .code-src { margin: 18px 0 6px; color: var(--muted); font-family: var(--mono); font-size: 10.5px; line-height: 1.6; }
+  pre { margin: 0 0 16px; padding: 16px 18px; border-radius: 5px; background: #1f2933; color: #e6edf3; overflow-x: auto; font-size: 12.5px; line-height: 1.7; }
+  pre code { background: none; border: 0; padding: 0; color: inherit; white-space: pre; font-size: inherit; }
+  ul { margin: 10px 0 14px 20px; padding: 0; }
+  li { margin: 8px 0; color: var(--ink-2); line-height: 1.85; }
+  li b { color: var(--ink); }
+  .summary { border-left: 3px solid var(--ink); padding-left: 22px; margin-top: 26px; }
+  .summary p { font-size: 16.5px; line-height: 1.9; margin-bottom: 13px; }
+  .summary b { color: var(--ink); }
+  @media (max-width: 820px) {
+    .page { padding: 36px 18px 52px; }
+    section { padding: 26px 22px; }
+    h1 { font-size: 34px; }
+    h2 { font-size: 24px; }
+    .grid-2, .grid-3 { grid-template-columns: 1fr; }
+    .flow { grid-template-columns: 1fr; gap: 7px; }
+    .flow .arrow { display: none; }
+    .cap-row { grid-template-columns: 128px 1fr 82px; gap: 8px; font-size: 12.5px; }
+    .stack-row { grid-template-columns: 116px 1fr 80px; gap: 8px; font-size: 12.5px; }
+    .visual svg { min-width: 640px; }
+    .section-head { align-items: flex-start; flex-direction: column; gap: 5px; }
+  }
+  @media print {
+    body { background: #fff; }
+    .page { max-width: none; padding: 0; }
+    section { break-inside: avoid; border-color: #c9c9c9; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <div class="eyebrow">KV Cache / Indexer</div>
+    <h1>Indexer Pool 与 Index Cache 管理</h1>
+    <p class="subtitle">
+      SGLang 与 vLLM 中 DSA、DeepSeek V4 / V4.1 和 MSA 的 index 侧缓存：
+      物理存储、写入读取、前缀匹配与驱逐。
+    </p>
+    <div class="meta">源码调研 · SGLang main / vLLM main · 2026.11</div>
+  </header>
+
+  <section>
+    <div class="section-head">
+      <span class="section-no">00</span>
+      <h2>管理方式随模型架构调整</h2>
+    </div>
+
+    <p class="lead">
+      SGLang 和 vLLM 都没有为 index cache 固定一套管理方式。实际实现会随模型结构变化：
+      DSA 采用每层 side buffer，MSA 把主 GQA 与 index K 分成两个 pool，V4 / V4.1 则按压缩率组织，
+      并在 V4.1 引入 source 层共享。
+    </p>
+
+    <p>
+      即便在同一引擎内，不同模型在 page 大小、entry 宽度、写入路径、source 关系和驱逐耦合上也不一样。
+      这些差异直接体现在 index 侧存储与主 cache 的衔接方式上。
+    </p>
+
+    <div class="grid-3">
+      <div class="card">
+        <h4>DSA / V3.2</h4>
+        <div class="sub">per-layer side buffer</div>
+        <p>每层一个 <code>IndexKeyCache</code>，page 64，entry 132 B。</p>
+        <div class="metric"><span>page</span><b>8,448 B</b></div>
+      </div>
+      <div class="card">
+        <h4>MSA</h4>
+        <div class="sub">main pool + index pool</div>
+        <p>主 GQA K/V 与 key-only index 分开存储，page 128。</p>
+        <div class="metric"><span>index/page</span><b>32 / 16 / 9 KiB</b></div>
+      </div>
+      <div class="card">
+        <h4>V4 / V4.1</h4>
+        <div class="sub">ratio pool + source sharing</div>
+        <p>按 compression ratio 建池；V4.1 的 consumer 复用 source 的 index K。</p>
+        <div class="metric"><span>FP8 / FP4</span><b>132 / 68 B</b></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <span class="section-no">01</span>
+      <h2>SGLang</h2>
+    </div>
+
+    <p class="lead">
+      SGLang 的 index 侧存储以独立的 pool 或 buffer 对象出现。DSA 每层一份；MSA 是 main + index 两套池；
+      V4 / V4.1 按压缩率和 source 层组织。三类模型的 entry 宽度、page 大小和写入路径都不同。
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>模型</th><th>index 对象</th><th>组织单位</th><th>entry</th><th>典型 page</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>DSA / V3.2</td><td><code>IndexKeyCache</code></td><td>每层固定 buffer</td><td>132 B</td><td>64 entry · 8,448 B</td></tr>
+          <tr><td>MSA</td><td><code>index_k_pool</code></td><td>main + index 两个 pool</td><td>256 / 128 / 72 B</td><td>128 entry · 32 / 16 / 9 KiB</td></tr>
+          <tr><td>DeepSeek V4</td><td><code>DeepSeekV4IndexerPool</code></td><td>按 compression ratio</td><td>132 / 68 B</td><td>由 page_size / ratio 决定</td></tr>
+          <tr><td>DeepSeek V4.1</td><td><code>DeepSeekV4IndexerPool</code></td><td>ratio + source layer</td><td>132 / 68 B</td><td>128 或 64 entry</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>1.1 DSA / V3.2：采用每层独立 side buffer</h3>
+
+    <p>
+      V3.2 的 index 侧不按压缩率或 source 组织，而是每个 DSA layer 各自一个
+      <code>IndexKeyCache</code>。它只负责该层的 index K，主 MLA cache 则由另一套 layer 管理。
+    </p>
+
+    <div class="grid-2">
+      <div class="card">
+        <h4>存储形态</h4>
+        <div class="sub">per-layer fixed slab</div>
+        <p>每层一个固定大小的 buffer，启动时按 page 一次性分配；请求来了不重新 malloc。</p>
+        <div class="metric"><span>entry</span><b>132 B</b></div>
+        <div class="metric"><span>page</span><b>64 entry · 8,448 B</b></div>
+      </div>
+      <div class="card">
+        <h4>和主 cache 的关系</h4>
+        <div class="sub">page id 绑定</div>
+        <p>index page 复用主 KV 的 page id；写入位置由主 KV 的 <code>slot_mapping</code> 决定。</p>
+        <p>物理地址不同，但逻辑上属于同一段 token。</p>
+      </div>
+    </div>
+
+    <h4>存储空间的计算</h4>
+    <p>
+      entry 由 128 B 的 FP8 index K 和 4 B 的 scale 组成，一共 132 B。一个 page 覆盖 64 个 token，
+      因此是 8,448 B。每层 buffer 的 page 数由容量向上取整，并额外留一页余量。
+    </p>
+
+    <div class="code-src">源码：python/sglang/srt/mem_cache/index_key_cache.py · IndexKeyCache._buffer_shape</div>
+    <pre><code>def _buffer_shape(self, num_pages: int) -> tuple[int, int]:
+    pool = self.pool
+    return (
+        num_pages,
+        pool.page_size
+        // pool.index_kpool
+        * (pool.index_head_dim + pool.index_head_dim // pool.quant_block_size * 4),
+    )</code></pre>
+
+    <p>
+      其中 <code>index_kpool=1</code> 表示一个 token 对应一个 entry；如果大于 1，
+      每页 entry 数按比例减少，但单个 entry 仍是 132 B。<code>move()</code> 只支持
+      <code>index_kpool == 1</code>，因为 pooled entry 需要重新分组。
+    </p>
+
+    <div class="visual">
+      <svg viewBox="0 0 980 190" role="img" aria-label="V3.2 index page 由 64 个 FP8 index K 与 scale 组成">
+        <g font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">
+          <text x="24" y="26" font-size="12" font-weight="600" fill="#17222d">V3.2 · 一个 64-token index page</text>
+          <rect x="24" y="50" width="792" height="42" rx="3" fill="#2d5b98"/>
+          <text x="42" y="77" font-size="12" fill="#ffffff" font-family="monospace">64 × 128 B FP8 index K = 8,192 B</text>
+          <rect x="816" y="50" width="24" height="42" rx="2" fill="#d9a36b"/>
+          <text x="852" y="77" font-size="11" fill="#9b5f1f" font-family="monospace">64 × 4 B scale = 256 B</text>
+          <text x="24" y="120" font-size="11.5" fill="#3b4a58">page = 8,448 B；entry = 132 B</text>
+          <text x="24" y="144" font-size="11" fill="#687583">page 数 = ceil(capacity / 64) + 1（额外留一页余量）</text>
+        </g>
+      </svg>
+      <div class="visual-caption">图 1 · V3.2 的 index page 布局：K 区域和 scale 区域在同一个 page 内。</div>
+    </div>
+
+    <h4>写入：index K 如何进入 cache</h4>
+    <p>
+      indexer 用独立的 <code>W_k</code> 从 hidden state 投影出 128 维 index K，做 LayerNorm 和部分 RoPE，
+      再按 128 维一个 block 量化。写入时按主 KV 的 <code>loc</code> 落到对应 page。
+      <code>SetKAndS</code> 同时写 K 和 scale；这个操作不经过主 attention 的 K/V。
+    </p>
+
+    <div class="code-src">源码：python/sglang/srt/mem_cache/index_key_cache.py · IndexKeyCache.store_quantized</div>
+    <pre><code>def store_quantized(
+    self,
+    layer_id: int,
+    loc: torch.Tensor,
+    index_k: torch.Tensor,
+    index_k_scale: torch.Tensor,
+) -> None:
+    buf = self._kernel_view(self.buffer[layer_id - self.pool.start_layer])
+    dsa_index_k_cache.SetKAndS.execute(
+        pool=self.pool,
+        buf=buf,
+        loc=loc,
+        index_k=index_k,
+        index_k_scale=index_k_scale,
+    )</code></pre>
+
+    <h4>读取：按 page table 取 K 和 scale</h4>
+    <p>
+      indexer 打分时按 <code>page_indices</code> 取出 index K 和 scale，再做 paged MQA。
+      历史 token 的 index K 不重新计算；只有当前 query 的 index Q 是新的。
+    </p>
+
+    <div class="code-src">源码：python/sglang/srt/mem_cache/index_key_cache.py · IndexKeyCache.get_k_and_scale</div>
+    <pre><code>def get_k_and_scale(
+    self,
+    layer_id: int,
+    seq_len_tensor: torch.Tensor,
+    page_indices: torch.Tensor,
+    seq_len_sum: int,
+    max_seq_len: int,
+):
+    buf = self.get_buffer(layer_id)
+    return dsa_index_k_cache.GetKAndS.execute(
+        self.pool,
+        buf,
+        page_indices=page_indices,
+        seq_len_tensor=seq_len_tensor,
+        seq_len_sum=seq_len_sum,
+        max_seq_len=max_seq_len,
+    )</code></pre>
+
+    <h4>前缀匹配与驱逐</h4>
+    <p>
+      prefix cache 仍然按 token prefix 在 RadixCache 中匹配。index 侧没有自己的树，也不额外决定命中长度；
+      一旦主 page 命中，它只是按同一个 page id 去读 index K。反过来，主 page 被释放后，
+      对应 index page 就不再有可达路径。
+    </p>
+    <p>
+      驱逐时只释放主 page，没有 <code>index_cache.free()</code>。index buffer 是固定 slab，
+      page id 被重新分配后，下一次写入会覆盖旧数据。因此 index 不需要独立的 free queue 或 LRU。
+    </p>
+
+    <div class="visual">
+      <div class="flow">
+        <div class="step"><b>1. 分配</b>每层固定 slab；page 数由容量决定</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>2. 写入</b>SetKAndS 按 loc 写 K + scale</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>3. 读取</b>page table → GetKAndS → MQA</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>4. 驱逐</b>主 page 释放，index page 不可达</div>
+      </div>
+      <div class="visual-caption">图 2 · V3.2 的 index 生命周期完全围绕主 page。</div>
+    </div>
+
+    <h3>1.2 DSA / V4.1：ratio pool 与 source 共享</h3>
+
+    <p>
+      V4.1 与 V3.2 的区别一方面是 entry 宽度，同时 index 侧的组织方式变了：
+      entry 对应 compressed state，pool 按 compression ratio 建立；ratio 1/2 的 consumer 不再各自持有 K cache，
+      而是复用最近的 source 层。
+    </p>
+
+    <div class="grid-2">
+      <div class="card">
+        <h4>ratio pool</h4>
+        <div class="sub">按压缩率组织</div>
+        <p>每个 pool 服务一个 ratio；<code>layer_mapping</code> 把 layer 映射到 <code>(ratio, compress_layer_id)</code>。</p>
+        <div class="metric"><span>FP8 / state</span><b>132 B</b></div>
+        <div class="metric"><span>FP4 / state</span><b>68 B</b></div>
+      </div>
+      <div class="card">
+        <h4>source sharing</h4>
+        <div class="sub">consumer 不新建 buffer</div>
+        <p>ratio 1/2 的 consumer 用 <code>source_layer_of()</code> 找到最近的 source，读它的 index K pool。</p>
+        <p>source page 释放时，所有 consumer 一起失效。</p>
+      </div>
+    </div>
+
+    <h4>存储分配</h4>
+    <p>
+      V4.1 的 index page 有两种粒度：DeepGEMM paged sparse 时 128 个 compressed slot，
+      其它 backend 为 64。每个 slot 对应一个 compressed state，而不是一个原始 token。
+      page 字节数仍是 <code>page_slots × bytes_per_state</code>。
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>dtype</th><th>per state</th><th>page=128</th><th>page=64</th></tr></thead>
+        <tbody>
+          <tr><td>FP8</td><td>132 B</td><td>16,896 B</td><td>8,448 B</td></tr>
+          <tr><td>FP4</td><td>68 B</td><td>8,704 B</td><td>4,352 B</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>
+      例如 ratio=2、page=128 时，一个 index page 覆盖 256 个原始 token，但只有 128 个 index state。
+      ratio=1 时，同样 page 只覆盖 128 个 token。ratio 改变的是 entry 的语义，不只是压缩率。
+    </p>
+
+    <div class="code-src">源码：python/sglang/srt/mem_cache/deepseek_v4_memory_pool.py · DeepSeekV4TokenToKVPool.source_layer_of</div>
+    <pre><code>def source_layer_of(self, layer_id: int) -> int:
+    """The layer owning this layer's compressed storage: itself for ratios 4/128,
+    the nearest preceding kv_source layer for ratios 1/2."""
+    ratio = self.compression_ratios[layer_id]
+    sources = [l for l in self.sources_by_ratio[ratio] if l <= layer_id]
+    assert sources, f"layer {layer_id} (ratio {ratio}) has no kv_source layer"
+    return max(sources)</code></pre>
+
+    <div class="visual">
+      <svg viewBox="0 0 980 235" role="img" aria-label="V4.1 source layer 拥有 index pool，consumer 层复用">
+        <defs>
+          <marker id="arr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a97a3"/>
+          </marker>
+        </defs>
+        <g font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">
+          <text x="24" y="26" font-size="12" font-weight="600" fill="#17222d">V4.1 · source 拥有 index K pool</text>
+
+          <rect x="24" y="58" width="210" height="48" rx="4" fill="#f5f8fb" stroke="#cbd5df"/>
+          <text x="38" y="88" font-size="12" fill="#3b4a58">layer 4 · consumer</text>
+          <rect x="24" y="118" width="210" height="48" rx="4" fill="#f5f8fb" stroke="#cbd5df"/>
+          <text x="38" y="148" font-size="12" fill="#3b4a58">layer 5 · consumer</text>
+          <rect x="24" y="178" width="210" height="38" rx="4" fill="#e7f0ed" stroke="#2d6b5f"/>
+          <text x="38" y="203" font-size="12" fill="#2d6b5f">layer 6 · kv source</text>
+
+          <path d="M 234 82 H 328 V 197" stroke="#8a97a3" stroke-width="1.4" fill="none" marker-end="url(#arr2)"/>
+          <path d="M 234 142 H 300 V 197 H 328" stroke="#8a97a3" stroke-width="1.4" fill="none" marker-end="url(#arr2)"/>
+          <path d="M 234 197 H 328" stroke="#2d6b5f" stroke-width="1.8" fill="none" marker-end="url(#arr2)"/>
+
+          <rect x="352" y="72" width="250" height="130" rx="5" fill="#fbf7f1" stroke="#dec4a6"/>
+          <text x="370" y="96" font-size="10" fill="#9b5f1f" font-family="monospace">SOURCE POOL</text>
+          <text x="370" y="120" font-size="14" font-weight="600" fill="#17222d">index K pool</text>
+          <text x="370" y="144" font-size="11.5" fill="#3b4a58">FP8 / FP4 per compressed state</text>
+          <text x="370" y="166" font-size="11.5" fill="#3b4a58">page 128 / 64 compressed slots</text>
+          <text x="370" y="188" font-size="11.5" fill="#687583">source 释放，consumer 一起失效</text>
+
+          <text x="640" y="108" font-size="11.5" fill="#3b4a58">consumer 不持有自己的 K cache；</text>
+          <text x="640" y="130" font-size="11.5" fill="#3b4a58">它只读 source 的 index page。</text>
+          <text x="640" y="152" font-size="11.5" fill="#687583">因此 index cache 的份数由 source 数决定，</text>
+          <text x="640" y="174" font-size="11.5" fill="#687583">不是由 consumer 层数决定。</text>
+        </g>
+      </svg>
+      <div class="visual-caption">图 3 · V4.1 的 source / consumer 关系：共享的是 index K pool 的所有权，不是把 consumer 合并成一层。</div>
+    </div>
+
+    <h4>写入：从 compressor latent 生成 index K</h4>
+    <p>
+      V4.1 的 index K 不直接从每个原始 token 的 hidden state 算，而是从 kv-source compressor 的 latent 出发。
+      先做 <code>wk</code> 投影，再 RMSNorm、RoPE 和 FP8/FP4 量化，最后写入 index page。
+      因此 index K 的数量与 compressed state 对齐。
+    </p>
+
+    <div class="visual">
+      <svg viewBox="0 0 980 300" role="img" aria-label="V4.1 从 compressor latent 生成 index K 并写入 paged cache 的路径">
+        <defs>
+          <marker id="arr-v41" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a97a3"/>
+          </marker>
+        </defs>
+        <g font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">
+          <text x="24" y="26" font-size="12" font-weight="600" fill="#17222d">V4.1 · 从 compressor latent 到 index K page</text>
+          <text x="876" y="26" text-anchor="end" font-size="10" fill="#687583" font-family="monospace">ONLY SOURCE</text>
+
+          <rect x="24" y="88" width="130" height="58" rx="4" fill="#f5f8fb" stroke="#cbd5df"/>
+          <text x="38" y="110" font-size="10" fill="#687583" font-family="monospace">INPUT</text>
+          <text x="38" y="130" font-size="12" font-weight="600" fill="#17222d">compressor latent</text>
+
+          <rect x="186" y="88" width="100" height="58" rx="4" fill="#e7f0ed" stroke="#2d6b5f"/>
+          <text x="198" y="110" font-size="10" fill="#2d6b5f" font-family="monospace">LINEAR</text>
+          <text x="198" y="130" font-size="13" font-weight="600" fill="#17222d">wk</text>
+
+          <rect x="318" y="88" width="116" height="58" rx="4" fill="#f5f8fb" stroke="#cbd5df"/>
+          <text x="330" y="110" font-size="10" fill="#687583" font-family="monospace">NORM</text>
+          <text x="330" y="130" font-size="12" font-weight="600" fill="#17222d">RMSNorm</text>
+
+          <rect x="466" y="88" width="100" height="58" rx="4" fill="#f5f8fb" stroke="#cbd5df"/>
+          <text x="478" y="110" font-size="10" fill="#687583" font-family="monospace">POSITION</text>
+          <text x="478" y="130" font-size="12" font-weight="600" fill="#17222d">RoPE</text>
+
+          <rect x="598" y="88" width="126" height="58" rx="4" fill="#fbf2e7" stroke="#b9814c"/>
+          <text x="610" y="110" font-size="10" fill="#9b5f1f" font-family="monospace">QUANT</text>
+          <text x="610" y="130" font-size="12" font-weight="600" fill="#17222d">FP8 / FP4</text>
+
+          <rect x="756" y="88" width="200" height="58" rx="4" fill="#eef2f5" stroke="#8fa2b2"/>
+          <text x="770" y="110" font-size="10" fill="#687583" font-family="monospace">PAGED STORE</text>
+          <text x="770" y="130" font-size="11.5" font-weight="600" fill="#17222d">indexer_k_norm_rope_store</text>
+
+          <path d="M 154 117 H 186" stroke="#8a97a3" stroke-width="1.5" fill="none" marker-end="url(#arr-v41)"/>
+          <path d="M 286 117 H 318" stroke="#8a97a3" stroke-width="1.5" fill="none" marker-end="url(#arr-v41)"/>
+          <path d="M 434 117 H 466" stroke="#8a97a3" stroke-width="1.5" fill="none" marker-end="url(#arr-v41)"/>
+          <path d="M 566 117 H 598" stroke="#8a97a3" stroke-width="1.5" fill="none" marker-end="url(#arr-v41)"/>
+          <path d="M 724 117 H 756" stroke="#8a97a3" stroke-width="1.5" fill="none" marker-end="url(#arr-v41)"/>
+
+          <text x="24" y="184" font-size="11" fill="#3b4a58">仅 source 层执行；consumer 直接复用 source 的 index K，不重复生成。</text>
+
+          <rect x="24" y="208" width="278" height="54" rx="4" fill="#f5f8fb" stroke="#cbd5df"/>
+          <text x="38" y="230" font-size="10" fill="#687583" font-family="monospace">ADDRESS</text>
+          <text x="38" y="248" font-size="11.5" fill="#3b4a58">indexer_metadata.slot_mapping</text>
+
+          <rect x="330" y="208" width="236" height="54" rx="4" fill="#fbf7f1" stroke="#dec4a6"/>
+          <text x="344" y="230" font-size="10" fill="#9b5f1f" font-family="monospace">OUTPUT</text>
+          <text x="344" y="248" font-size="11.5" fill="#3b4a58">k_cache.kv_cache · index K</text>
+
+          <rect x="594" y="208" width="362" height="54" rx="4" fill="#e7f0ed" stroke="#2d6b5f"/>
+          <text x="608" y="230" font-size="10" fill="#2d6b5f" font-family="monospace">BYTES</text>
+          <text x="608" y="248" font-size="11.5" fill="#3b4a58">132 B / state (FP8) · 68 B / state (FP4)</text>
+
+          <text x="24" y="288" font-size="10.5" fill="#687583">compression ratio 决定 state 数量；page 128/64 个 compressed slot 为一个 index page。</text>
+        </g>
+      </svg>
+      <div class="visual-caption">
+        图 4 · V4.1 的写入是 latent → 投影 → norm → RoPE → 量化 → paged store；consumer 不执行这条路径。
+        <br>源码路径：<code>python/sglang/srt/layers/attention/dsv4/dsv41_sparse.py</code> · <code>DeepseekV41Indexer._produce_k</code>
+      </div>
+    </div>
+
+    <h4>读取：candidate block 两级选择</h4>
+    <p>
+      V4.1 的 indexer 先在全历史 compressed position 上算 logits 的 block max，选出 candidate block；
+      然后只在 candidate block 内做细粒度 top-k。candidate block 是临时结果，不是持久 cache。
+    </p>
+
+    <div class="visual">
+      <div class="flow">
+        <div class="step"><b>1. source 建池</b>ratio 1/2 的 source 持有 index K</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>2. 写 K</b>latent → wk → norm → RoPE → quant</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>3. 选块</b>block max → candidate blocks</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>4. 最终 top-k</b>候选内做 sparse logits</div>
+      </div>
+      <div class="visual-caption">图 5 · V4.1 把 index K 的组织和 top-k 的粗筛都放到 source / candidate 层。</div>
+    </div>
+
+    <h4>前缀匹配与驱逐</h4>
+    <p>
+      V4.1 仍然由主 compressed page 决定 token 前缀是否可复用；index 侧没有独立 prefix tree。
+      source page 被释放后，consumer 的 index page 一起不可达，consumer 不能单独保留一份。
+      page id 复用后，source 和 consumer 看到的是新覆盖的数据。
+    </p>
+
+    <h3>1.3 MSA</h3>
+
+    <p>
+      MSA 把主 GQA K/V 与 index K 放在两个物理 pool 中。index 侧是 key-only，
+      page 128；bf16、fp8、nvfp4 对应三套不同容量。它和 DSA 的 side buffer 不同，
+      这里主 cache 与 index cache 是一个组合 pool 的两个子池。
+    </p>
+
+    <div class="grid-3">
+      <div class="card">
+        <h4>bf16</h4>
+        <div class="sub">1 head × 128 dim</div>
+        <p>不做额外量化，精度最高。</p>
+        <div class="metric"><span>entry</span><b>256 B</b></div>
+        <div class="metric"><span>page</span><b>32 KiB</b></div>
+      </div>
+      <div class="card">
+        <h4>fp8</h4>
+        <div class="sub">e4m3</div>
+        <p>1 B / element，容量减半。</p>
+        <div class="metric"><span>entry</span><b>128 B</b></div>
+        <div class="metric"><span>page</span><b>16 KiB</b></div>
+      </div>
+      <div class="card">
+        <h4>nvfp4</h4>
+        <div class="sub">packed payload + scale</div>
+        <p>64 B payload + 8 B scale。</p>
+        <div class="metric"><span>entry</span><b>72 B</b></div>
+        <div class="metric"><span>page</span><b>9 KiB</b></div>
+      </div>
+    </div>
+
+    <h4>写入：一个 fused kernel 同时写两套池</h4>
+    <p>
+      MSA 在 fused QKV 投影后，直接把主 K/V 和 index K 写到两个 pool。index K 走独立输出通道，
+      不是主 K 的复制。index page 按 128 B 行对齐，所以 nvfp4 的 9,216 B 正好落在 128 B 边界上。
+    </p>
+
+    <div class="visual">
+      <svg viewBox="0 0 980 330" role="img" aria-label="MSA fused kernel 同时写主 K/V 与 index K 两个 pool">
+        <defs>
+          <marker id="arr-msa" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#8a97a3"/>
+          </marker>
+        </defs>
+        <g font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">
+          <text x="24" y="26" font-size="12" font-weight="600" fill="#17222d">MSA · 一个 fused kernel，两个写入目标</text>
+
+          <rect x="24" y="62" width="146" height="62" rx="4" fill="#f5f8fb" stroke="#cbd5df"/>
+          <text x="38" y="84" font-size="10" fill="#687583" font-family="monospace">INPUT</text>
+          <text x="38" y="105" font-size="12" font-weight="600" fill="#17222d">hidden state</text>
+
+          <rect x="208" y="62" width="220" height="62" rx="4" fill="#e7f0ed" stroke="#2d6b5f"/>
+          <text x="222" y="84" font-size="10" fill="#2d6b5f" font-family="monospace">FUSED PROJECTION</text>
+          <text x="222" y="105" font-size="12" font-weight="600" fill="#17222d">Q / K / V + index Q / K</text>
+
+          <rect x="466" y="62" width="240" height="62" rx="4" fill="#fbf2e7" stroke="#b9814c"/>
+          <text x="480" y="84" font-size="10" fill="#9b5f1f" font-family="monospace">FUSED KERNEL</text>
+          <text x="480" y="105" font-size="11.5" font-weight="600" fill="#17222d">QK-norm + RoPE + insert</text>
+
+          <rect x="744" y="54" width="212" height="58" rx="4" fill="#eaf0f8" stroke="#8fa9c9"/>
+          <text x="758" y="76" font-size="10" fill="#2d5b98" font-family="monospace">MAIN PATH</text>
+          <text x="758" y="96" font-size="11.5" fill="#3b4a58">主 K/V → main_pool</text>
+
+          <rect x="744" y="128" width="212" height="58" rx="4" fill="#fbf7f1" stroke="#dec4a6"/>
+          <text x="758" y="150" font-size="10" fill="#9b5f1f" font-family="monospace">INDEX PATH</text>
+          <text x="758" y="170" font-size="11.5" fill="#3b4a58">index K → index_k_pool</text>
+
+          <path d="M 170 93 H 208" stroke="#8a97a3" stroke-width="1.5" fill="none" marker-end="url(#arr-msa)"/>
+          <path d="M 428 93 H 466" stroke="#8a97a3" stroke-width="1.5" fill="none" marker-end="url(#arr-msa)"/>
+          <path d="M 706 83 H 744" stroke="#8a97a3" stroke-width="1.5" fill="none" marker-end="url(#arr-msa)"/>
+          <path d="M 706 147 V 157 H 744" stroke="#8a97a3" stroke-width="1.5" fill="none" marker-end="url(#arr-msa)"/>
+
+          <text x="24" y="222" font-size="11" fill="#3b4a58">main_slot_mapping 与 index_slot_mapping 指向两个 pool 的 page；index 不走主 K 的字节。</text>
+
+          <rect x="24" y="246" width="280" height="54" rx="4" fill="#eef2f5" stroke="#8fa2b2"/>
+          <text x="38" y="268" font-size="10" fill="#687583" font-family="monospace">PAGE</text>
+          <text x="38" y="286" font-size="11.5" fill="#3b4a58">128 tokens · 128 B row alignment</text>
+
+          <rect x="328" y="246" width="280" height="54" rx="4" fill="#f5f8fb" stroke="#cbd5df"/>
+          <text x="342" y="268" font-size="10" fill="#687583" font-family="monospace">INDEX ENTRY</text>
+          <text x="342" y="286" font-size="11.5" fill="#3b4a58">256 B bf16 · 128 B fp8 · 72 B nvfp4</text>
+
+          <rect x="632" y="246" width="324" height="54" rx="4" fill="#e7f0ed" stroke="#2d6b5f"/>
+          <text x="646" y="268" font-size="10" fill="#2d6b5f" font-family="monospace">OUTPUT</text>
+          <text x="646" y="286" font-size="11.5" fill="#3b4a58">主 GQA K/V 与 index K 同时落 page</text>
+        </g>
+      </svg>
+      <div class="visual-caption">
+        图 6 · MSA 的 fused 写入：主 K/V 与 index K 来自同一个 projection，但写向两个 pool；index K 有独立输出通道。
+        <br>源码路径：<code>python/sglang/srt/models/minimax_m3.py</code> · <code>MiniMaxM3SparseAttention.forward</code>
+      </div>
+    </div>
+
+    <h4>读取、前缀与驱逐</h4>
+    <p>
+      读取时 MSA indexer 从 <code>index_k_pool</code> 取 K，做 index score 和 block top-k；
+      top-k 结果进入临时 buffer，不写回 cache。前缀匹配仍由主 GQA cache 的 page 决定，
+      index pool 不参与独立匹配。主 page 释放后 index page 不可达，没有独立 index LRU/free。
+    </p>
+
+    <div class="visual">
+      <div class="flow">
+        <div class="step"><b>1. 组合池</b>main_pool + index_k_pool 分开分配</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>2. fused 写</b>主 K/V 与 index K 同时落 page</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>3. index 打分</b>读 index_k_pool，做 block top-k</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>4. 主 page 驱逐</b>index page 跟随失效</div>
+      </div>
+      <div class="visual-caption">图 7 · MSA 的两套池共享 page 生命周期，但物理存储和写入通道分开。</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <span class="section-no">02</span>
+      <h2>vLLM：layer cache + spec，采用通用 manager管理</h2>
+    </div>
+
+    <p class="lead">
+      vLLM 不把 index 做成单独的 pool 类，而是把每层 index cache 注册成通用 <code>KVCacheSpec</code>，
+      由 <code>KVCacheManager</code> 和 <code>BlockPool</code> 分配。代码里没有 DeepSeek 专用
+      group/component；group 和生命周期都从 spec 推导出来。
+    </p>
+
+    <div class="visual">
+      <svg viewBox="0 0 980 210" role="img" aria-label="vLLM 一个 block 内包含主 layer page 与 index layer page">
+        <g font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">
+          <text x="24" y="26" font-size="12" font-weight="600" fill="#17222d">vLLM：一个逻辑 block 内可以有多个 layer page</text>
+          <rect x="24" y="50" width="900" height="92" rx="5" fill="#f7f9fa" stroke="#cbd5df"/>
+          <text x="42" y="74" font-size="10" fill="#687583" font-family="monospace">BLOCK ID = B</text>
+          <rect x="42" y="86" width="390" height="38" rx="3" fill="#2d5b98"/>
+          <text x="58" y="110" font-size="12" fill="#ffffff" font-family="monospace">主 layer page · main K/V</text>
+          <rect x="448" y="86" width="330" height="38" rx="3" fill="#a8641f"/>
+          <text x="464" y="110" font-size="12" fill="#ffffff" font-family="monospace">index layer page · index K</text>
+          <rect x="794" y="86" width="112" height="38" rx="3" fill="#e7f0ed" stroke="#2d6b5f"/>
+          <text x="808" y="110" font-size="11" fill="#2d6b5f" font-family="monospace">其它 layer</text>
+          <text x="24" y="172" font-size="11.5" fill="#3b4a58">物理地址不同；如果 spec 能合并到同一个 group，它们共享 block id 和 block table。</text>
+          <text x="24" y="192" font-size="11.5" fill="#687583">如果 cache_role / spec 不能合并，就落入不同 group，使用不同 block id。</text>
+        </g>
+      </svg>
+      <div class="visual-caption">图 8 · vLLM 的“同 block”是分配层的同 block，不是同一段字节；index 仍是独立 layer page。</div>
+    </div>
+
+    <div class="callout warn">
+      <b>与 SGLang 的表达差异：</b>
+      SGLang 把 index cache 做成独立 pool 对象；vLLM 让模型返回 <code>get_kv_cache_spec()</code>，再由通用 manager 分配 block。
+      因此找不到 DeepSeek 专用 group/component，是正常现象。
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>模型</th><th>index layer cache</th><th>spec 关键字段</th><th>entry</th><th>典型 block</th></tr></thead>
+        <tbody>
+          <tr><td>DSA / V3.2</td><td><code>DeepseekV32IndexerCache</code></td><td><code>cache_role=INDEXER</code></td><td>132 B</td><td>64 entry · 8,448 B</td></tr>
+          <tr><td>DeepSeek V4</td><td><code>DeepseekV4IndexerCache</code></td><td><code>tokens_per_state=ratio</code></td><td>132 / 68 B</td><td>按 ratio 换算</td></tr>
+          <tr><td>DeepSeek V4.1</td><td><code>DeepseekV4IndexerCache</code></td><td><code>block_stride_alignment</code></td><td>132 / 68 B</td><td>按 ratio 换算</td></tr>
+          <tr><td>MSA</td><td><code>MiniMaxM3IndexerCache</code></td><td><code>cache_role=INDEXER</code></td><td>256 / 128 / 72 B</td><td>128 entry · 32 / 16 / 9 KiB</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>2.1 V3.2：spec + block</h3>
+
+    <p>
+      V3.2 的 index cache 在 vLLM 里就是一层 layer cache。模型声明
+      <code>MLAAttentionSpec(cache_role=INDEXER)</code>：1 个 head、132 B/state、block 64。
+      manager 按 block 分配，runner 通过 <code>bind_kv_cache()</code> 绑定。
+    </p>
+
+    <div class="code-src">源码：vllm/model_executor/models/deepseek_v2.py · DeepseekV32IndexerCache.get_kv_cache_spec</div>
+    <pre><code>return MLAAttentionSpec(
+    block_size=self.cache_config.block_size,
+    num_kv_heads=1,
+    max_tp_shards=1,
+    head_size=self.head_dim,
+    dtype=self.dtype,
+    cache_role=SparseCacheRole.INDEXER,
+)  # Only has one vector instead of K + V</code></pre>
+
+    <p>
+      写入由 <code>indexer_k_quant_and_cache</code> 完成，位置来自主 KV 的
+      <code>slot_mapping</code>。读取用 paged MQA。block 释放时 index page 随所属 group 的 block
+      一起不可达；没有独立 index free/LRU。
+    </p>
+
+    <h3>2.2 V4：compressed state 的 spec 表达</h3>
+
+    <p>
+      V4 不再用“一个 token 一个 state”，而是把 <code>tokens_per_state</code> 设为
+      <code>compress_ratio</code>。这样同样的 block 只容纳更少的 state，但每个 state 覆盖更多原始 token。
+      index K 由 compressor 写，indexer 只读。
+    </p>
+
+    <div class="code-src">源码：vllm/models/deepseek_v4/attention.py · DeepseekV4IndexerCache.get_kv_cache_spec</div>
+    <pre><code>return MLAAttentionSpec(
+    block_size=self.cache_config.block_size,
+    num_kv_heads=1,
+    max_tp_shards=1,
+    head_size=self.head_dim,
+    dtype=self.dtype,
+    tokens_per_state=self.compress_ratio,
+    alignment=576 if uses_fp8_ds_mla_layout else 512,
+)</code></pre>
+
+    <p>
+      V4 的 <code>IndexCache</code> 复用 top-k，但不改变 index K 的分配：
+      被跳过的层仍然保留 index page。prefix 和 eviction 仍由主 compressed block 决定。
+    </p>
+
+    <h3>2.3 V4.1：source sharing 与 candidate</h3>
+
+    <p>
+      V4.1 仍然叫 <code>DeepseekV4IndexerCache</code>，但只有 kv-source 真正创建 cache。
+      consumer 从 <code>static_forward_context</code> 取 source 的 cache 对象；
+      index K 由 compressor latent 投影，top-k 使用 candidate block 两级选择。
+    </p>
+
+    <div class="code-src">源码：vllm/models/deepseek_v41/attention.py · DeepseekV4Attention.__init__</div>
+    <pre><code>if self.is_kv_source:
+    index_k_cache = DeepseekV4IndexerCache(
+        head_dim=_indexer_k_cache_head_dim(
+            config.index_head_dim, dsa_indexer_uses_fp4(vllm_config)
+        ),
+        dtype=torch.uint8,
+        prefix=f"{prefix}.indexer.k_cache",
+        cache_config=cache_config,
+        compress_ratio=self.compress_ratio,
+    )
+else:
+    k_cache_prefix = (
+        f"{_replace_layer_index(prefix, self.kv_source_layer_id)}"
+        ".indexer.k_cache"
+    )
+    index_k_cache = self._static_forward_context.get(k_cache_prefix)</code></pre>
+
+    <p>
+      ratio=2、block=64 时，一个 block 有 32 个 state，FP8/FP4 为 4,224 / 2,176 B。
+      source block 释放会影响所有 consumer；index 侧没有独立 prefix tree。
+    </p>
+
+    <h3>2.4 MSA：key-only layer cache</h3>
+
+    <p>
+      MSA 的 <code>MiniMaxM3IndexerCache</code> 是 key-only layer cache，block 128。
+      entry 为 256 B bf16 / 128 B fp8 / 72 B nvfp4；写入仍由 fused QK-norm + RoPE + KV insert 完成，
+      读取由 <code>MiniMaxM3IndexerImpl</code> 做 index score 和 block top-k。
+    </p>
+
+    <p>
+      index page 跟随主 GQA cache 的 block。没有独立 prefix tree、LRU 或 free queue；
+      主 block 释放后 index page 不可达。
+    </p>
+
+    <div class="visual">
+      <div class="flow">
+        <div class="step"><b>1. 声明</b><code>get_kv_cache_spec()</code> 给出 layer 格式</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>2. 分配</b>manager 按 block 分配并绑定</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>3. 写入 / 读取</b>量化写入，MQA 读取</div>
+        <div class="arrow">→</div>
+        <div class="step"><b>4. 驱逐</b><code>BlockPool</code> 释放 block</div>
+      </div>
+      <div class="visual-caption">图 9 · vLLM 比 SGLang 多一步 spec→manager；后两步的语义相同。</div>
+    </div>
+
+    <h3>2.5 与 SGLang 的差异 <span class="tag tag-diff">差异</span></h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>维度</th><th>SGLang</th><th>vLLM</th></tr></thead>
+        <tbody>
+          <tr><td>抽象</td><td>对象化 pool / side buffer</td><td>声明式 layer cache + <code>KVCacheSpec</code></td></tr>
+          <tr><td>分配入口</td><td>pool 构造时分配</td><td><code>get_kv_cache_spec</code> → manager 分配 block</td></tr>
+          <tr><td>group/component</td><td>index 不是 component；owner 可走 Full/SWA</td><td>没有 index 专用 group；使用通用 group/spec</td></tr>
+          <tr><td>V4.1 source 共享</td><td><code>layer_mapping</code> / <code>source_layer_of</code></td><td><code>is_kv_source</code> / static context</td></tr>
+          <tr><td>top-k 复用</td><td>skip_topk / candidate</td><td>IndexCache / candidate</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <span class="section-no">03</span>
+      <h2>每 1K token 的 index cache 占用</h2>
+    </div>
+
+    <p class="lead">
+      把不同模型的 entry 宽度归一化到 1,000 个原始 token，可以直接比较 index 侧的显存量级。
+      压缩模型按“每 1K 原始 token 对应多少 compressed state”换算；V4.1 的数字按一个 source layer 计，
+      不乘 consumer 层数。
+    </p>
+
+    <div class="callout">
+      <b>计算口径：</b>
+      <div class="calc">
+        <div>entries = 1,000 / tokens_per_entry</div>
+        <div>logical_bytes = entries × entry_bytes</div>
+        <div>pages = ceil(entries / entries_per_page)</div>
+        <div>allocated_bytes = pages × page_bytes</div>
+      </div>
+      <p style="margin-top:10px;">
+        其中 DSA / MSA 的 <code>tokens_per_entry = 1</code>；V4 / V4.1 的
+        <code>tokens_per_entry = compress_ratio</code>。1 KiB 按 1,024 B 计算。
+      </p>
+    </div>
+
+    <div class="cap-chart">
+      <div class="cap-row"><span class="cap-name">DSA / V3.2</span><div class="cap-track"><div class="cap-fill c-dsa" style="width:51.6%"></div></div><span class="cap-val">128.9 KiB</span></div>
+      <div class="cap-row"><span class="cap-name">MSA · bf16</span><div class="cap-track"><div class="cap-fill c-bf16" style="width:100%"></div></div><span class="cap-val">250.0 KiB</span></div>
+      <div class="cap-row"><span class="cap-name">MSA · fp8</span><div class="cap-track"><div class="cap-fill c-fp8" style="width:50%"></div></div><span class="cap-val">125.0 KiB</span></div>
+      <div class="cap-row"><span class="cap-name">MSA · nvfp4</span><div class="cap-track"><div class="cap-fill c-nvfp4" style="width:28.1%"></div></div><span class="cap-val">70.3 KiB</span></div>
+      <div class="cap-row"><span class="cap-name">V4.1 · C2 / FP8</span><div class="cap-track"><div class="cap-fill c-c2" style="width:25.8%"></div></div><span class="cap-val">64.5 KiB</span></div>
+      <div class="cap-row"><span class="cap-name">V4.1 · C2 / FP4</span><div class="cap-track"><div class="cap-fill c-c2f" style="width:13.3%"></div></div><span class="cap-val">33.2 KiB</span></div>
+      <div class="cap-row"><span class="cap-name">V4.1 · C4 / FP8</span><div class="cap-track"><div class="cap-fill c-c4" style="width:12.9%"></div></div><span class="cap-val">32.2 KiB</span></div>
+      <div class="cap-row"><span class="cap-name">V4.1 · C4 / FP4</span><div class="cap-track"><div class="cap-fill c-c4f" style="width:6.6%"></div></div><span class="cap-val">16.6 KiB</span></div>
+    </div>
+    <div class="visual-caption">图 10 · 逻辑 index cache 占用 / 1,000 原始 token；未计 page/block 对齐，V4/V4.1 按一个 source layer 计；V4 C4 与 V4.1 C4 同值，图中未重复画。</div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>模型</th>
+            <th>一个 entry</th>
+            <th>index page / block</th>
+            <th>每 1K token 的逻辑量</th>
+            <th>页对齐后</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>DSA / V3.2</td>
+            <td>132 B / token</td>
+            <td>64 slot · 8,448 B</td>
+            <td>128.9 KiB</td>
+            <td>132 KiB（16 页）</td>
+          </tr>
+          <tr>
+            <td>MSA · bf16</td>
+            <td>256 B / token</td>
+            <td>128 slot · 32 KiB</td>
+            <td>250.0 KiB</td>
+            <td>256 KiB（8 页）</td>
+          </tr>
+          <tr>
+            <td>MSA · fp8</td>
+            <td>128 B / token</td>
+            <td>128 slot · 16 KiB</td>
+            <td>125.0 KiB</td>
+            <td>128 KiB（8 页）</td>
+          </tr>
+          <tr>
+            <td>MSA · nvfp4</td>
+            <td>72 B / token</td>
+            <td>128 slot · 9 KiB</td>
+            <td>70.3 KiB</td>
+            <td>72 KiB（8 页）</td>
+          </tr>
+          <tr>
+            <td>DeepSeek V4 · C4 / FP8</td>
+            <td>132 B / state</td>
+            <td>64 slot · 8,448 B<br>16 state · 2,112 B</td>
+            <td>32.2 KiB</td>
+            <td>33 KiB（4 页 / 16 block）</td>
+          </tr>
+          <tr>
+            <td>DeepSeek V4 · C4 / FP4</td>
+            <td>68 B / state</td>
+            <td>64 slot · 4,352 B<br>16 state · 1,088 B</td>
+            <td>16.6 KiB</td>
+            <td>17 KiB（4 页 / 16 block）</td>
+          </tr>
+          <tr>
+            <td>V4.1 · C2 / FP8</td>
+            <td>132 B / state</td>
+            <td>128 slot（SGLang）· 16,896 B<br>32 state（vLLM block 64）· 4,224 B</td>
+            <td>64.5 KiB</td>
+            <td>66 KiB（4 页 / 16 block）</td>
+          </tr>
+          <tr>
+            <td>V4.1 · C2 / FP4</td>
+            <td>68 B / state</td>
+            <td>128 slot · 8,704 B<br>32 state · 2,176 B</td>
+            <td>33.2 KiB</td>
+            <td>34 KiB（4 页 / 16 block）</td>
+          </tr>
+          <tr>
+            <td>V4.1 · C4 / FP8</td>
+            <td>132 B / state</td>
+            <td>64 slot · 8,448 B<br>16 state · 2,112 B</td>
+            <td>32.2 KiB</td>
+            <td>33 KiB（4 页 / 16 block）</td>
+          </tr>
+          <tr>
+            <td>V4.1 · C4 / FP4</td>
+            <td>68 B / state</td>
+            <td>64 slot · 4,352 B<br>16 state · 1,088 B</td>
+            <td>16.6 KiB</td>
+            <td>17 KiB（4 页 / 16 block）</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="muted" style="font-size:13px;">
+      DeepSeek V4 的 C4 entry/page 与 V4.1 C4 相同；差异在 V4 每层各自持有，V4.1 只有 source 持有、consumer 复用。
+      表中 V4.1 的数字按一个 source layer 计。
+    </p>
+
+    <div class="callout">
+      <b>量级结论：</b>
+      在 1K token 这个尺度上，DSA 约 129 KiB，MSA bf16 约 250 KiB、fp8 约 125 KiB；
+      V4.1 C2/C4 的 FP8 分别约 65/32 KiB。压缩率从 C2 到 C4，或 dtype 从 bf16 到 fp8，
+      都会把 index 侧容量减半，是同一量级的主要杠杆。
+    </div>
+
+    <h3>3.1 总量中的占比</h3>
+
+    <div class="callout">
+      <b>参考口径：</b>主 KV 按 bf16 计算。DSA 的 MLA latent 为
+      <code>kv_lora_rank 512 + qk_rope_head_dim 64 = 576</code> 个元素，即 1,152 B/token；
+      MSA 为 4 个 KV head × 128 dim × K/V，即 2,048 B/token。index 按前表的 dtype。
+    </div>
+
+    <div class="stack-chart">
+      <div class="stack-row">
+        <span class="cap-name">DSA / V3.2</span>
+        <div class="stack-track"><div class="stack-main" style="width:50%"></div><div class="stack-index" style="width:5.7%"></div></div>
+        <span class="stack-val">10.3% index</span>
+      </div>
+      <div class="stack-row">
+        <span class="cap-name">MSA · bf16 index</span>
+        <div class="stack-track"><div class="stack-main" style="width:88.9%"></div><div class="stack-index" style="width:11.1%"></div></div>
+        <span class="stack-val">11.1% index</span>
+      </div>
+      <div class="stack-row">
+        <span class="cap-name">MSA · fp8 index</span>
+        <div class="stack-track"><div class="stack-main" style="width:88.9%"></div><div class="stack-index" style="width:5.6%"></div></div>
+        <span class="stack-val">5.9% index</span>
+      </div>
+      <div class="stack-row">
+        <span class="cap-name">MSA · nvfp4 index</span>
+        <div class="stack-track"><div class="stack-main" style="width:88.9%"></div><div class="stack-index" style="width:3.1%"></div></div>
+        <span class="stack-val">3.4% index</span>
+      </div>
+    </div>
+    <div class="stack-legend">
+      <span><i class="stack-main"></i>主 KV（bf16）</span>
+      <span><i class="stack-index"></i>index K</span>
+    </div>
+    <div class="visual-caption">图 11 · 每 token 的“主 KV + index K”构成；条形总长度按 2,304 B 归一化。</div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>模型</th><th>主 KV / token</th><th>index K / token</th><th>合计</th><th>index 占比</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>DSA / V3.2</td><td>1,152 B</td><td>132 B</td><td>1,284 B</td><td>10.3%</td></tr>
+          <tr><td>MSA · bf16</td><td>2,048 B</td><td>256 B</td><td>2,304 B</td><td>11.1%</td></tr>
+          <tr><td>MSA · fp8</td><td>2,048 B</td><td>128 B</td><td>2,176 B</td><td>5.9%</td></tr>
+          <tr><td>MSA · nvfp4</td><td>2,048 B</td><td>72 B</td><td>2,120 B</td><td>3.4%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="muted" style="font-size:13px;">
+      如果主 KV 也用 fp8，占比会明显变化：DSA 为 132 / (576 + 132) ≈ 18.6%；
+      MSA 的 bf16 / fp8 / nvfp4 index 分别为 20.0% / 11.1% / 6.6%。
+      这里只算 attention 侧主 KV + index K，不含 top-k 临时 buffer、page padding 和 TP 副本。
+    </p>
+
+    <p>
+      V4 / V4.1 的主 cache 也是 compressed state，不是 per-token：
+      <code>index 占比 = index_bytes_per_state / (main_bytes_per_state + index_bytes_per_state)</code>。
+      只要把该模型的主 compressed latent 维度和 dtype 代进去，算法与 DSA/MSA 相同。
+    </p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <span class="section-no">04</span>
+      <h2>归纳</h2>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>维度</th><th>SGLang</th><th>vLLM</th></tr></thead>
+        <tbody>
+          <tr><td>index 身份</td><td>pool / side buffer</td><td>独立 layer cache</td></tr>
+          <tr><td>逻辑绑定</td><td>page id</td><td>block id</td></tr>
+          <tr><td>物理存储</td><td>独立 pool</td><td>独立 layer page</td></tr>
+          <tr><td>prefix</td><td>RadixCache</td><td>KVCacheManager</td></tr>
+          <tr><td>驱逐</td><td>主 page</td><td>主 block</td></tr>
+          <tr><td>独立 index LRU/tree</td><td>无</td><td>无</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="summary">
+      <p><b>1. 语义一致，表达不同。</b>两边都把 index K 当作主 cache 的 sidecar：物理存储分开，逻辑 page/block 绑定，prefix 和驱逐跟随 owner。</p>
+      <p><b>2. 模型差异在组织方式。</b>DSA V3.2 是每层 side buffer；V4.1 是 ratio pool + source 共享；MSA 是 main + index 组合。</p>
+      <p><b>3. index 不缩短前缀。</b>真正决定复用边界的是 full / SWA / linear / Mamba 等 owner cache；DSA/MSA 的 index 只跟随，不额外加约束。</p>
+    </div>
+
+    <p class="muted" style="margin-top:20px;font-size:13px;">
+      注：page 与 entry 数是典型配置，实际值会随模型 page size、TP 切分、dtype 和 alignment/padding 变化。
+    </p>
+  </section>
+
+</div>
+</body>
+</html>
